@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
 	"github.com/aws/aws-sdk-go/service/kinesis"
 	"github.com/aws/aws-sdk-go/service/kinesis/kinesisiface"
+	"github.com/awslabs/kinesis-aggregation/go/deaggregator"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
@@ -463,6 +464,29 @@ func (k *Kinsumer) Next() (data []byte, err error) {
 	}
 
 	return data, err
+}
+
+// NextRecords is a blocking function used to get the next record from the kinesis queue, or errors that
+// occurred during the processing of kinesis. It's up to the caller to stop processing by calling 'Stop()'
+//
+// if err is non nil an error occurred in the system.
+// if err is nil and record is nil then kinsumer has been stopped
+func (k *Kinsumer) NextRecords() (rec []*kinesis.Record, err error) {
+	select {
+	case err = <-k.errors:
+		return nil, err
+	case record, ok := <-k.output:
+		if ok {
+			k.config.stats.EventToClient(*record.record.ApproximateArrivalTimestamp, record.retrievedAt)
+			deaggRecords, err := deaggregator.DeaggregateRecords([]*kinesis.Record{record.record})
+			if err != nil {
+				return nil, err
+			}
+			rec = deaggRecords
+		}
+	}
+
+	return rec, err
 }
 
 // CreateRequiredTables will create the required dynamodb tables
